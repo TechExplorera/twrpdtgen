@@ -23,6 +23,9 @@ def main():
 						help="custom output folder")
 
 	# Optional DeviceTree arguments
+	parser.add_argument("--super-size", type=int, default=None, metavar="BYTES",
+						help="size of the super partition in bytes "
+						     "(adb shell blockdev --getsize64 /dev/block/by-name/super)")
 	parser.add_argument("--git", action='store_true',
 						help="create a git repo after the generation")
 
@@ -34,7 +37,7 @@ def main():
 
 	setup_logging(args.debug)
 
-	device_tree = DeviceTree(image=args.image)
+	device_tree = DeviceTree(image=args.image, super_partition_size=args.super_size)
 	folder = device_tree.dump_to_folder(args.output, git=args.git)
 
 	print(f"\nDone! You can find the device tree in {folder}")
