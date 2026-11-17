@@ -58,7 +58,18 @@ jobs:
       - name: Download image
         env:
           IMAGE_URL: ${{ inputs.image_url }}
-        run: bash scripts/fetch_image.sh "$IMAGE_URL" input/recovery.img
+        run: |
+          if ! [[ "$IMAGE_URL" =~ ^https?:// ]]; then
+            echo "::error::image_url must be an http(s) link, got: $IMAGE_URL"
+            echo "The workflow runs on a GitHub server and can't read files from your computer."
+            echo "Upload the image first and use the direct download link it gives you, e.g.:"
+            echo "  curl -T recovery.img https://<your-uploader>/recovery.img"
+            echo "or attach it to a release of this repository and use the asset link:"
+            echo "  gh release create images --notes images recovery.img"
+            echo "  -> https://github.com/<you>/twrpdtgen/releases/download/images/recovery.img"
+            exit 1
+          fi
+          bash scripts/fetch_image.sh "$IMAGE_URL" input/recovery.img
 
       - name: Generate device tree
         env:
