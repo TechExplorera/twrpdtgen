@@ -60,6 +60,32 @@ lunch twrp_<codename>-eng
 mka recoveryimage   # or `mka bootimage` if the device has no recovery partition
 ```
 
+## Using it from GitHub Actions
+
+No local setup needed: fork this repository, then go to **Actions → Generate TWRP device tree → Run workflow**.
+
+1. Upload your stock `recovery.img` (or `boot.img` if the device has no recovery partition) somewhere that gives a **direct download link**, e.g.:
+
+   ```sh
+   curl -T recovery.img https://<your-uploader>/recovery.img
+   ```
+
+   The workflow also accepts `.img.lz4`, `.img.gz`/`.xz`, `.zip` and `.tar`/`.tar.md5` archives (e.g. a Samsung `AP_*.tar.md5`), and picks `recovery.img` (or `boot.img`) from them.
+
+2. Fill in the inputs:
+
+   | Input | Description |
+   |---|---|
+   | `image_url` | Direct link to the image or archive |
+   | `super_size` | Optional: super partition size in bytes (`adb shell blockdev --getsize64 /dev/block/by-name/super`) |
+   | `build_twrp` | Also build TWRP with the generated tree (1-2 hours) |
+   | `twrp_branch` | Minimal manifest branch used for the build (`twrp-12.1` or `twrp-14.1`) |
+
+3. When it finishes you get:
+   - a **release** with `twrp_device_<manufacturer>_<codename>.tar.gz`. Extract it in the root of your TWRP source to get `device/<manufacturer>/<codename>`;
+   - the tree as a workflow **artifact**, plus a summary with the file list and `BoardConfig.mk`;
+   - if `build_twrp` is enabled, the built `recovery.img`/`boot.img` attached to the same release (plus an Odin `.tar` for Samsung).
+
 You can also use the module in a script, with the following code:
 
 ```python
