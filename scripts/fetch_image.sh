@@ -68,9 +68,41 @@ find_image_in() {
 	return 1
 }
 
+normalize_url() {
+	# Turn share/view links of known hosts into direct download links
+	local url="$1" id=""
+	case "$url" in
+		*drive.google.com/file/d/*)
+			id="$(sed -E 's|.*/file/d/([^/?#]+).*|\1|' <<< "$url")"
+			;;
+		*drive.google.com/*id=*|*drive.usercontent.google.com/*id=*|*docs.google.com/*id=*)
+			id="$(sed -E 's|.*[?&]id=([^&#]+).*|\1|' <<< "$url")"
+			;;
+	esac
+	if [ -n "$id" ]; then
+		# Session parameters (uuid, at, authuser) from the browser don't work on other machines
+		echo "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t"
+		return
+	fi
+	echo "$url"
+}
+
+URL="$(normalize_url "$URL")"
+
 log "Downloading image..."
 curl -fL --retry 3 --retry-delay 5 --connect-timeout 30 -o "$WORK_DIR/input" "$URL"
 log "Downloaded $(stat -c%s "$WORK_DIR/input") bytes"
+
+if file -b "$WORK_DIR/input" | grep -q "HTML"; then
+	if grep -q "Google Drive: Sign-in\|accounts.google.com/ServiceLogin" "$WORK_DIR/input"; then
+		echo "Error: Google Drive asked to sign in: the file is private." >&2
+		echo "In Drive: right click the file -> Share -> General access -> 'Anyone with the link', then retry." >&2
+	else
+		echo "Error: the link returned a web page instead of the file." >&2
+		echo "Use a direct download link (opening it should download the file right away)." >&2
+	fi
+	exit 1
+fi
 
 FILE="$(decompress "$WORK_DIR/input")"
 
