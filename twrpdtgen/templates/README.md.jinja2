@@ -24,7 +24,6 @@ repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
 # Place this tree in device/{{ device_info.manufacturer }}/{{ device_info.codename }}
 
-export ALLOW_MISSING_DEPENDENCIES=true
 . build/envsetup.sh
 lunch twrp_{{ device_info.codename }}-eng
 mka {{ "bootimage" if tree.recovery_as_boot else "recoveryimage" }}
@@ -39,6 +38,34 @@ On newer sources that require a release config, use `lunch twrp_{{ device_info.c
 
 `BOARD_SUPER_PARTITION_SIZE` in `BoardConfig.mk` is a placeholder. Replace it with
 the real size of your super partition (`adb shell blockdev --getsize64 /dev/block/by-name/super`).
+
+{% endif %}
+## Tree layout
+
+```
+{{ device_info.codename }}/
+├── Android.bp / Android.mk
+├── AndroidProducts.mk
+├── BoardConfig.mk
+├── device.mk
+├── twrp_{{ device_info.codename }}.mk
+├── vendorsetup.sh
+├── recovery.fstab                    # mountable partitions (AOSP format)
+├── prebuilt/                         # kernel, dtb, dtbo from the stock image
+└── recovery/root/
+    ├── *.rc                          # init scripts from the stock recovery
+{% if tree.kernel_modules %}
+    ├── lib/modules/                  # kernel modules ({{ tree.kernel_modules|length }}), loaded by TW_LOAD_VENDOR_MODULES
+{% endif %}
+    └── system/etc/twrp.flags         # raw partitions (backup/flash) and removable storage
+```
+
+{% if tree.is_samsung %}
+## Samsung notes
+
+TWRP can't decrypt Samsung's `/data`, so you'll need to format data after flashing.
+To flash with Odin, pack the image as a tar: `tar -cvf twrp.tar {{ "boot.img" if tree.recovery_as_boot else "recovery.img" }}`.
+Use **Advanced → Reboot → Download** to go back to Odin mode.
 
 {% endif %}
 {% if tree.uses_crypto %}

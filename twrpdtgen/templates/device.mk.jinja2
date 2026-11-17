@@ -7,6 +7,14 @@ LOCAL_PATH := device/{{ device_info.manufacturer }}/{{ device_info.codename }}
 PRODUCT_SHIPPING_API_LEVEL := {{ tree.first_api_level }}
 
 {% endif %}
+{% if tree.first_api_level >= 29 %}
+# Health
+PRODUCT_PACKAGES += \
+    android.hardware.health@2.1-impl \
+    android.hardware.health@2.1-impl.recovery \
+    android.hardware.health@2.1-service
+
+{% endif %}
 {% if tree.uses_dynamic_partitions %}
 # Dynamic partitions
 PRODUCT_USE_DYNAMIC_PARTITIONS := true

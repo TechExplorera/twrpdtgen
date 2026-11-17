@@ -82,6 +82,9 @@ BOARD_DTB_OFFSET := {{ image_info.dtb_offset }}
 {% if tree.header_version %}
 BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
 {% endif %}
+{% if tree.board_name %}
+BOARD_MKBOOTIMG_ARGS += --board {{ tree.board_name }}
+{% endif %}
 {% if tree.header_version < 3 %}
 {% if image_info.kernel_offset %}
 BOARD_MKBOOTIMG_ARGS += --kernel_offset $(BOARD_KERNEL_OFFSET)
@@ -226,12 +229,27 @@ TW_INCLUDE_LIBRESETPROP := true
 TW_FRAMERATE := 60
 TARGET_USES_MKE2FS := true
 RECOVERY_SDCARD_ON_DATA := true
+TW_INCLUDE_NTFS_3G := true
 {% if tree.uses_dynamic_partitions %}
 TW_INCLUDE_FASTBOOTD := true
+TW_INCLUDE_LPDUMP := true
+TW_INCLUDE_LPTOOLS := true
+{% endif %}
+{% if tree.kernel_modules %}
+TW_LOAD_VENDOR_MODULES := "{{ tree.kernel_modules|join(' ') }}"
 {% endif %}
 {% if tree.recovery_as_boot %}
 TW_HAS_NO_RECOVERY_PARTITION := true
 {% endif %}
 {% if tree.soc_vendor == "qcom" %}
 TARGET_RECOVERY_QCOM_RTC_FIX := true
+{% endif %}
+{% if tree.is_samsung %}
+
+# Samsung
+TW_NO_REBOOT_BOOTLOADER := true
+TW_HAS_DOWNLOAD_MODE := true
+TW_USE_SERIALNO_PROPERTY_FOR_DEVICE_ID := true
+# TWRP can't decrypt Samsung's /data (proprietary keystore), format data to use it
+TW_INCLUDE_CRYPTO := false
 {% endif %}

@@ -12,7 +12,7 @@ from sebaubuntu_libs.libandroid.device_info import DeviceInfo
 from sebaubuntu_libs.libandroid.fstab import Fstab, FstabEntry
 from sebaubuntu_libs.libandroid.props import BuildProp
 from sebaubuntu_libs.liblogging import LOGD, LOGW
-from shutil import copyfile, rmtree
+from shutil import copyfile, copytree, rmtree
 from twrpdtgen import __version__ as version
 from twrpdtgen.templates import render_template
 from typing import Optional
@@ -41,6 +41,33 @@ SUPER_METADATA_RESERVED_SIZE = 4 * 1024 * 1024
 # Logical partitions that need TARGET_COPY_OUT_* to be set
 COPY_OUT_PARTITIONS = ["system_ext", "product", "vendor", "odm",
                        "vendor_dlkm", "odm_dlkm", "system_dlkm"]
+
+# Raw (emmc) partitions that stay in recovery.fstab, everything else goes to twrp.flags
+FSTAB_KEEP_RAW_PARTITIONS = {"/misc"}
+
+# Raw partitions that can be flashed with an image from TWRP
+FLASHABLE_RAW_PARTITIONS = {"boot", "dtbo", "init_boot", "recovery", "vendor_boot",
+                            "vbmeta", "vbmeta_system", "vbmeta_vendor"}
+
+RAW_PARTITION_DISPLAY_NAMES = {
+	"boot": "Boot",
+	"dtbo": "DTBO",
+	"init_boot": "Init Boot",
+	"recovery": "Recovery",
+	"vendor_boot": "Vendor Boot",
+	"vbmeta": "VBMeta",
+	"vbmeta_system": "VBMeta System",
+	"vbmeta_vendor": "VBMeta Vendor",
+	"efs": "EFS",
+	"sec_efs": "Sec EFS",
+	"persist": "Persist",
+	"modem": "Modem",
+	"nvram": "NVRAM",
+	"nvdata": "NVDATA",
+	"nvcfg": "NVCFG",
+	"protect_f": "Protect F",
+	"protect_s": "Protect S",
+}
 
 QCOM_PLATFORM_PREFIXES = ("msm", "sdm", "sm", "apq", "qcs", "qcm")
 QCOM_PLATFORM_NAMES = {"atoll", "bengal", "crow", "holi", "kalama", "kona",
@@ -175,8 +202,22 @@ class DeviceTree:
 		else:
 			soc_vendor = "generic"
 
+		is_samsung = (device_info.manufacturer or "").lower() == "samsung"
+
+		# Kernel modules shipped in the stock recovery ramdisk
+		self.modules_path = None
+		for modules_path in [self.image_info.ramdisk / "lib" / "modules",
+		                     self.image_info.ramdisk / "vendor" / "lib" / "modules"]:
+			if modules_path.is_dir() and any(modules_path.rglob("*.ko")):
+				self.modules_path = modules_path
+				break
+		kernel_modules = sorted(module.name for module in self.modules_path.rglob("*.ko")) if self.modules_path else []
+
 		return {
 			"header_version": header_version,
+			"is_samsung": is_samsung,
+			"board_name": self.image_info.board_name or "",
+			"kernel_modules": kernel_modules,
 			"is_ab": is_ab,
 			"ab_partitions": ab_partitions,
 			"has_recovery_partition": has_recovery_partition,
@@ -189,7 +230,8 @@ class DeviceTree:
 			"super_partition_size_is_known": super_partition_size_is_known,
 			"super_group_name": f"{device_info.manufacturer}_dynamic_partitions",
 			"super_group_size": super_group_size,
-			"uses_crypto": uses_fbe or uses_fde,
+			# TWRP can't decrypt Samsung devices (proprietary keystore), like the official trees
+			"uses_crypto": (uses_fbe or uses_fde) and not is_samsung,
 			"uses_fbe": uses_fbe,
 			"uses_metadata_encryption": uses_metadata_encryption,
 			"has_metadata_partition": has_metadata_partition,
@@ -252,6 +294,7 @@ class DeviceTree:
 		self._render_template(device_tree_folder, "device.mk")
 		self._render_template(device_tree_folder, "twrp_device.mk", out_file=f"twrp_{self.device_info.codename}.mk")
 		self._render_template(device_tree_folder, "README.md")
+		self._render_template(device_tree_folder, "vendorsetup.sh")
 
 		LOGD("Copying kernel...")
 		if self.image_info.kernel is not None:
@@ -267,6 +310,16 @@ class DeviceTree:
 		# Keep the AOSP (v2) fstab format: TWRP parses it natively and it
 		# preserves the fs_mgr flags (encryption, slotselect, logical, ...)
 		(device_tree_folder / "recovery.fstab").write_text(self._format_fstab())
+
+		LOGD("Generating twrp.flags...")
+		twrp_flags_path = recovery_root_path / "system" / "etc"
+		twrp_flags_path.mkdir(parents=True)
+		(twrp_flags_path / "twrp.flags").write_text(self._format_twrp_flags())
+
+		if self.modules_path is not None:
+			LOGD("Copying kernel modules...")
+			copytree(self.modules_path, recovery_root_path / "lib" / "modules",
+			         symlinks=False, dirs_exist_ok=True)
 
 		LOGD("Copying init scripts...")
 		for init_rc in self.init_rcs:
@@ -301,8 +354,58 @@ class DeviceTree:
 
 		return device_tree_folder
 
+	def _is_fstab_entry(self, entry: FstabEntry) -> bool:
+		"""Whether an entry belongs to recovery.fstab (mountable) or to twrp.flags (raw/removable)."""
+		if not entry.mount_point.startswith("/"):
+			return False
+		if any(flag.startswith("voldmanaged=") for flag in entry.fs_flags):
+			return False
+		if entry.fs_type in ("emmc", "mtd", "bml") and entry.mount_point not in FSTAB_KEEP_RAW_PARTITIONS:
+			return False
+		return True
+
+	def _strip_samsung_encryption(self, flags: list[str]) -> list[str]:
+		if not self.tree["is_samsung"]:
+			return flags
+		return [flag for flag in flags
+		        if flag.partition("=")[0] not in ("fileencryption", "metadata_encryption",
+		                                         "keydirectory", "forceencrypt", "encryptable")]
+
+	def _format_twrp_flags(self) -> str:
+		lines = ["# mount point\tfstype\t\tdevice\t\t\t\tflags", ""]
+
+		has_sdcard = False
+		for entry in self.fstab.entries:
+			if self._is_fstab_entry(entry):
+				continue
+
+			if any(flag.startswith("voldmanaged=") for flag in entry.fs_flags):
+				has_sdcard = True
+				continue
+
+			name = Path(entry.mount_point).name
+			flags = ["backup=1"]
+			if name in FLASHABLE_RAW_PARTITIONS:
+				flags.append("flashimg=1")
+			if entry.is_slotselect():
+				flags.append("slotselect")
+			display = RAW_PARTITION_DISPLAY_NAMES.get(name)
+			if display:
+				flags.append(f'display="{display}"')
+
+			lines.append(f"{entry.mount_point}\t{entry.fs_type}\t\t{entry.src}\t\tflags={';'.join(flags)}")
+
+		lines += ["", "# Removable storage"]
+		if has_sdcard:
+			lines.append("/external_sd\tauto\t\t/dev/block/mmcblk1p1\t/dev/block/mmcblk1\t"
+			             "flags=display=\"MicroSD\";storage;wipeingui;removable")
+		lines.append("/usb_otg\tauto\t\t/dev/block/sdg1\t\t/dev/block/sdg\t\t"
+		             "flags=display=\"USB OTG\";storage;wipeingui;removable")
+
+		return "\n".join(lines) + "\n"
+
 	def _format_fstab(self) -> str:
-		entries: list[FstabEntry] = self.fstab.entries
+		entries: list[FstabEntry] = [entry for entry in self.fstab.entries if self._is_fstab_entry(entry)]
 		columns = [(entry.src, entry.mount_point, entry.fs_type, ",".join(entry.mnt_flags))
 		           for entry in entries]
 		headers = ("#<src>", "<mnt_point>", "<type>", "<mnt_flags>")
@@ -314,7 +417,7 @@ class DeviceTree:
 
 		lines = [format_line(headers, "<fs_mgr_flags>")]
 		for entry, values in zip(entries, columns):
-			lines.append(format_line(values, ",".join(entry.fs_flags)))
+			lines.append(format_line(values, ",".join(self._strip_samsung_encryption(entry.fs_flags))))
 
 		return "\n".join(lines) + "\n"
 
