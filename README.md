@@ -6,7 +6,7 @@
 Create a [TWRP](https://twrp.me/)-compatible device tree only from an Android recovery image (or a boot image if the device uses non-dynamic partitions A/B) of your device's stock ROM
 It has been confirmed that this script supports images built starting from Android 4.4 up to Android 12
 
-Requires Python 3.8 or greater
+Requires Python 3.9 or greater
 
 ## Installation
 
